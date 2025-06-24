@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/hibiken/asynq"
 )
@@ -107,10 +106,11 @@ func HandleChatAssignAgentTask(ctx context.Context, task *asynq.Task) (err error
 		return
 	}
 
-	go func() {
-		time.Sleep(15 * time.Second)
-		wimr.Resolve("This is a test message to mark as resolved")
-	}()
+	// Resolve chat after 20s
+	// go func() {
+	// 	time.Sleep(15 * time.Second)
+	// 	wimr.Resolve("This is a test message to mark as resolved")
+	// }()
 
 	err = tx.Commit(ctx)
 	if err != nil {
