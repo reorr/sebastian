@@ -1,0 +1,20 @@
+listen:
+  port: 8080
+
+db:
+  connection_string: postgres://postgres:postgres@localhost:5432/qiscus_test
+
+webhook:
+  base_url: https://example.com
+  max_current_customer: 3
+
+redis:
+  url: localhost:6379
+
+qiscus:
+  base_url: https://omnichannel.qiscus.com
+  app_id: xxxxx
+  secret_key: xxxxx
+  channel_id: xxxxx
+  email: test@mail.com
+  password: supersecretpassword
