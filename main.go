@@ -100,7 +100,7 @@ func runServer(port int) {
 	r.Use(middleware.Logger)
 	r.Post(WEBHOOK_INCOMING_MESSAGE_PATH, HandleIncomingMessage)
 	r.Post(WEBHOOK_MARK_AS_RESOLVED_PATH, HandleMarkAsResolved)
-	// r.Get("/agents", HandleGetAllAgent)
+	r.Get("/agents", HandleGetAllAgent)
 	// r.Get("/webhook-config", HandlerGetWebhookConfig)
 	r.Post("/set-webhook", HandlerSetWebhook)
 	// r.Get("/get-available-agent", HandlerGetAvailableAgent)

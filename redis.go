@@ -97,7 +97,7 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 		}
 
 		foundUnknownCustomerKey := false
-
+		agentCustomerCount := 0
 		for _, id := range agentIDs {
 			isOnlineKey := fmt.Sprintf("agent:%s:is_online", id)
 			customerCountKey := fmt.Sprintf("agent:%s:customer_count", id)
@@ -110,32 +110,50 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 				}
 			}
 
-			if isOnline {
-				customerCount, err := rdb.Get(ctx, customerCountKey).Int()
-				if err != nil {
-					if err != redis.Nil {
-						log.Printf("Error getting current customer count %s err: %v", customerCountKey, err)
-						return agentID, fmt.Errorf("Could not get is_online")
-					}
-				}
-				if customerCount == -1 {
+			if !isOnline {
+				continue
+			}
+
+			customerCount, err := rdb.Get(ctx, customerCountKey).Int()
+			if err != nil {
+				if err != redis.Nil {
 					foundUnknownCustomerKey = true
 					continue
 				}
-				if customerCount < maxCustomerCount {
-					log.Printf("Found agent %s for room %s with current customer count %d", id, roomID, customerCount)
-					return id, nil
+				log.Printf("Error getting current customer count %s err: %v", customerCountKey, err)
+				return agentID, fmt.Errorf("Could not get customer count")
+			}
+
+			if customerCount == -1 {
+				foundUnknownCustomerKey = true
+				continue
+			}
+
+			if customerCount < maxCustomerCount {
+				if agentID == "" {
+					agentCustomerCount = customerCount
+					agentID = id
+					continue
+				}
+				if customerCount <= agentCustomerCount {
+					agentCustomerCount = customerCount
+					agentID = id
 				}
 			}
 		}
 
+		if agentID != "" {
+			log.Printf("Found agent %s for room %s with current customer count %d", agentID, roomID, agentCustomerCount)
+			return agentID, nil
+		}
+
 		if foundUnknownCustomerKey {
-			agentID, err := GetAndCacheAvailableAgentWithCustomerCount(ctx, roomID, maxCustomerCount)
+			agentID, customerCount, err := GetAndCacheAvailableAgentWithCustomerCount(ctx, roomID, maxCustomerCount)
 			if err != nil {
 				fmt.Println("Can not call available agent")
 			}
 			if agentID != "" {
-				log.Printf("Found agent id %s for room %s from source", agentID, roomID)
+				log.Printf("Found agent id %s for room %s from source", agentID, customerCount, roomID)
 				return agentID, nil
 			}
 		}
@@ -146,11 +164,11 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 	return agentID, fmt.Errorf("Can not find any available agent")
 }
 
-func GetAndCacheAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxCustomerCount int) (agentID string, err error) {
+func GetAndCacheAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxCustomerCount int) (agentID string, agentCustomerCount int, err error) {
 	availableAgents, err := GetAvailableAgent(roomID)
 	if err != nil {
 		log.Printf("Error getting available agents: %v", err)
-		return agentID, err
+		return agentID, agentCustomerCount, err
 	}
 
 	for _, agent := range availableAgents.Data.Agents {
@@ -160,19 +178,27 @@ func GetAndCacheAvailableAgentWithCustomerCount(ctx context.Context, roomID stri
 		err = rdb.Set(ctx, isOnlineKey, true, 0).Err()
 		if err != nil {
 			log.Printf("Error set %s err: %v", isOnlineKey, err)
-			return agentID, err
+			return agentID, agentCustomerCount, err
 		}
 
 		err = rdb.Set(ctx, customerCountKey, agent.CurrentCustomerCount, 0).Err()
 		if err != nil {
 			log.Printf("Error set %s err: %v", customerCountKey, err)
-			return agentID, err
+			return agentID, agentCustomerCount, err
 		}
 
 		if agent.CurrentCustomerCount < maxCustomerCount {
-			agentID = fmt.Sprintf("%d", agent.ID)
+			if agentID == "" {
+				agentCustomerCount = agent.CurrentCustomerCount
+				agentID = fmt.Sprintf("%d", agent.ID)
+				continue
+			}
+			if agent.CurrentCustomerCount <= agentCustomerCount {
+				agentCustomerCount = agent.CurrentCustomerCount
+				agentID = fmt.Sprintf("%d", agent.ID)
+			}
 		}
 	}
 
-	return agentID, nil
+	return agentID, agentCustomerCount, nil
 }
