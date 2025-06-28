@@ -153,7 +153,7 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 				fmt.Println("Can not call available agent")
 			}
 			if agentID != "" {
-				log.Printf("Found agent id %s for room %s from source", agentID, customerCount, roomID)
+				log.Printf("Found agent id %s for room %s with customer count %d from source", agentID, roomID, customerCount)
 				return agentID, nil
 			}
 		}

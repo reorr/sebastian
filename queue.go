@@ -31,7 +31,6 @@ func NewChatAssignAgentTask(wimr *WebhookIncomingMessageRequest) (*asynq.Task, e
 }
 
 func HandleChatAssignAgentTask(ctx context.Context, task *asynq.Task) (err error) {
-	// time.Sleep(5 * time.Second)
 	var wimr WebhookIncomingMessageRequest
 	if err = json.Unmarshal(task.Payload(), &wimr); err != nil {
 		return err
