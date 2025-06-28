@@ -100,7 +100,7 @@ func runServer(port int) {
 	r.Use(middleware.Logger)
 	r.Post(WEBHOOK_INCOMING_MESSAGE_PATH, HandleIncomingMessage)
 	r.Post(WEBHOOK_MARK_AS_RESOLVED_PATH, HandleMarkAsResolved)
-	// r.Get("/agents", HandleGetAllAgent)
+	r.Get("/agents", HandleGetAllAgent)
 	// r.Get("/webhook-config", HandlerGetWebhookConfig)
 	r.Post("/set-webhook", HandlerSetWebhook)
 	// r.Get("/get-available-agent", HandlerGetAvailableAgent)
@@ -112,6 +112,9 @@ func runServer(port int) {
 }
 
 func runWorker() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	fmt.Println("Starting worker...")
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisConfig.Url},
@@ -123,7 +126,7 @@ func runWorker() {
 	if err := CacheAgentStatus(); err != nil {
 		panic(fmt.Errorf("Initial agent cache update failed: %w", err))
 	}
-	go InitAgents()
+	InitAgents(ctx)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(TypeChatAssignAgent, HandleChatAssignAgentTask)
@@ -184,16 +187,23 @@ func CacheAgentStatus() error {
 	return nil
 }
 
-func InitAgents() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+func InitAgents(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
 
-	for {
-		select {
-		case <-ticker.C:
-			if err := CacheAgentStatus(); err != nil {
-				log.Println("Agent cache update failed:", err)
+	go func() {
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := CacheAgentStatus(); err != nil {
+					log.Println("Agent cache update failed:", err)
+				}
+				log.Println("Agent cache updated")
+			case <-ctx.Done():
+				log.Println("Stopping agent status updater")
+				return
 			}
 		}
-	}
+	}()
 }
