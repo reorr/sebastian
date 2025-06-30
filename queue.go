@@ -160,11 +160,18 @@ func HandleChatAssignAgentTask(ctx context.Context, task *asynq.Task) (err error
 	// go func() {
 	// 	delay := time.Duration(5+rand.Intn(6)) * time.Second
 
-	// 	log.Printf("Waiting %s before resolving chat %s", delay, wimr.RoomID)
+	// 	logger.Info(
+	// 		"waiting before resolving chat",
+	// 		slog.Any("delay", delay/time.Second),
+	// 		slog.String("room_id", wimr.RoomID),
+	// 	)
 	// 	time.Sleep(delay)
 
 	// 	wimr.Resolve("This is a test message to mark as resolved")
-	// 	log.Printf("Room %s resolved", wimr.RoomID)
+	// 	logger.Info(
+	// 		"room resolved",
+	// 		slog.String("room_id", wimr.RoomID),
+	// 	)
 	// }()
 
 	err = tx.Commit(ctx)
