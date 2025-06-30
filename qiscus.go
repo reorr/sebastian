@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -198,7 +199,11 @@ func GetAllAgent() (*GetAllAgentResponse, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		logger.Error(
+			"failed to make get all agents request",
+			slog.Any("error", err),
+			slog.String("url", cfg.QiscusConfig.BaseUrl+GET_ALL_AGENT_PATH),
+		)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -209,7 +214,11 @@ func GetAllAgent() (*GetAllAgentResponse, error) {
 
 	var response GetAllAgentResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		fmt.Println("Error decoding response:", err)
+		logger.Error(
+			"failed to decode get all agents response",
+			slog.Any("error", err),
+			slog.Int("status_code", resp.StatusCode),
+		)
 		return nil, err
 	}
 
@@ -268,7 +277,12 @@ func GetAvailableAgent(roomID string) (*GetAvailableAgentResponse, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error making request:", err)
+		logger.Error(
+			"failed to make get available agent request",
+			slog.Any("error", err),
+			slog.String("room_id", roomID),
+			slog.String("url", fmt.Sprintf("%s%s?room_id=%s", cfg.QiscusConfig.BaseUrl, GET_AVAILABLE_AGENT_PATH, roomID)),
+		)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -279,7 +293,12 @@ func GetAvailableAgent(roomID string) (*GetAvailableAgentResponse, error) {
 
 	var response GetAvailableAgentResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		fmt.Println("Error decoding response:", err)
+		logger.Error(
+			"failed to decode get available agent response",
+			slog.Any("error", err),
+			slog.String("room_id", roomID),
+			slog.Int("status_code", resp.StatusCode),
+		)
 		return nil, err
 	}
 

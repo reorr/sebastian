@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -92,7 +92,11 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 	for time.Since(start) < maxRetryDuration {
 		agentIDs, err := rdb.SMembers(ctx, "agents:ids").Result()
 		if err != nil {
-			log.Printf("Error getting agents %v", err)
+			logger.Error(
+				"failed to get agent ids from redis",
+				slog.Any("error", err),
+				slog.String("room_id", roomID),
+			)
 			return agentID, fmt.Errorf("SMembers error: %w", err)
 		}
 
@@ -105,7 +109,12 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 			isOnline, err := rdb.Get(ctx, isOnlineKey).Bool()
 			if err != nil {
 				if err != redis.Nil {
-					log.Printf("Error getting online status %s err: %v", isOnlineKey, err)
+					logger.Error(
+						"failed to get agent online status",
+						slog.Any("error", err),
+						slog.String("is_online_key", isOnlineKey),
+						slog.String("agent_id", id),
+					)
 					return agentID, fmt.Errorf("Could not get is_online")
 				}
 			}
@@ -120,7 +129,12 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 					foundUnknownCustomerKey = true
 					continue
 				}
-				log.Printf("Error getting current customer count %s err: %v", customerCountKey, err)
+				logger.Error(
+					"failed to get agent customer count",
+					slog.Any("error", err),
+					slog.String("customer_count_key", customerCountKey),
+					slog.String("agent_id", id),
+				)
 				return agentID, fmt.Errorf("Could not get customer count")
 			}
 
@@ -143,22 +157,40 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 		}
 
 		if agentID != "" {
-			log.Printf("Found agent %s for room %s with current customer count %d", agentID, roomID, agentCustomerCount)
+			logger.Info(
+				"found available agent",
+				slog.String("agent_id", agentID),
+				slog.String("room_id", roomID),
+				slog.Int("customer_count", agentCustomerCount),
+			)
 			return agentID, nil
 		}
 
 		if foundUnknownCustomerKey {
 			agentID, customerCount, err := GetAndCacheAvailableAgentWithCustomerCount(ctx, roomID, maxCustomerCount)
 			if err != nil {
-				fmt.Println("Can not call available agent")
+				logger.Error(
+					"failed to get and cache available agent",
+					slog.Any("error", err),
+					slog.String("room_id", roomID),
+				)
 			}
 			if agentID != "" {
-				log.Printf("Found agent id %s for room %s with customer count %d from source", agentID, roomID, customerCount)
+				logger.Info(
+					"found agent from api source",
+					slog.String("agent_id", agentID),
+					slog.String("room_id", roomID),
+					slog.Int("customer_count", customerCount),
+				)
 				return agentID, nil
 			}
 		}
 
-		log.Printf("Retrying allocate agent for room %s", roomID)
+		logger.Warn(
+			"retrying agent allocation",
+			slog.String("room_id", roomID),
+			slog.Duration("elapsed", time.Since(start)),
+		)
 		time.Sleep(retryInterval)
 	}
 	return agentID, fmt.Errorf("Can not find any available agent")
@@ -167,7 +199,11 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 func GetAndCacheAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxCustomerCount int) (agentID string, agentCustomerCount int, err error) {
 	availableAgents, err := GetAvailableAgent(roomID)
 	if err != nil {
-		log.Printf("Error getting available agents: %v", err)
+		logger.Error(
+			"failed to get available agents from api",
+			slog.Any("error", err),
+			slog.String("room_id", roomID),
+		)
 		return agentID, agentCustomerCount, err
 	}
 
@@ -177,13 +213,24 @@ func GetAndCacheAvailableAgentWithCustomerCount(ctx context.Context, roomID stri
 
 		err = rdb.Set(ctx, isOnlineKey, true, 0).Err()
 		if err != nil {
-			log.Printf("Error set %s err: %v", isOnlineKey, err)
+			logger.Error(
+				"failed to set agent online status",
+				slog.Any("error", err),
+				slog.String("is_online_key", isOnlineKey),
+				slog.Int("agent_id", agent.ID),
+			)
 			return agentID, agentCustomerCount, err
 		}
 
 		err = rdb.Set(ctx, customerCountKey, agent.CurrentCustomerCount, 0).Err()
 		if err != nil {
-			log.Printf("Error set %s err: %v", customerCountKey, err)
+			logger.Error(
+				"failed to set agent customer count",
+				slog.Any("error", err),
+				slog.String("customer_count_key", customerCountKey),
+				slog.Int("agent_id", agent.ID),
+				slog.Int("customer_count", agent.CurrentCustomerCount),
+			)
 			return agentID, agentCustomerCount, err
 		}
 

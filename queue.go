@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"github.com/hibiken/asynq"
@@ -33,51 +34,87 @@ func NewChatAssignAgentTask(wimr *WebhookIncomingMessageRequest) (*asynq.Task, e
 func HandleChatAssignAgentTask(ctx context.Context, task *asynq.Task) (err error) {
 	var wimr WebhookIncomingMessageRequest
 	if err = json.Unmarshal(task.Payload(), &wimr); err != nil {
+		logger.Error(
+			"failed to unmarshal task payload",
+			slog.Any("error", err),
+			slog.String("task_type", task.Type()),
+		)
 		return err
 	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
+		logger.Error(
+			"failed to begin database transaction",
+			slog.Any("error", err),
+			slog.String("room_id", wimr.RoomID),
+		)
 		return err
 	}
 
 	isChatRoomExists, err := IsChatRoomExists(ctx, tx, wimr.RoomID)
 	if err != nil {
-		fmt.Println("Error checking if chat room exists:", err)
+		logger.Error(
+			"failed to check if chat room exists",
+			slog.Any("error", err),
+			slog.String("room_id", wimr.RoomID),
+		)
 		tx.Rollback(ctx)
 		return err
 	}
 
 	if isChatRoomExists {
-		fmt.Println(fmt.Sprintf("Chat room %s already exists, skipping creation", wimr.RoomID))
+		logger.Info(
+			"chat room already exists, skipping creation",
+			slog.String("room_id", wimr.RoomID),
+		)
 		tx.Rollback(ctx)
 		return nil
 	}
 
 	err = CreateChat(ctx, tx, &wimr)
 	if err != nil {
-		fmt.Println("Error creating chat:", err)
+		logger.Error(
+			"failed to create chat",
+			slog.Any("error", err),
+			slog.String("room_id", wimr.RoomID),
+		)
 		tx.Rollback(ctx)
 		return err
 	}
 
 	availableAgentID, err := GetAvailableAgentWithCustomerCount(ctx, wimr.RoomID, int(cfg.WebhookConfig.MaxCurrentCustomer))
 	if err != nil {
-		fmt.Println("Error find available agent:", err)
+		logger.Error(
+			"failed to find available agent",
+			slog.Any("error", err),
+			slog.String("room_id", wimr.RoomID),
+			slog.Int("max_customer", int(cfg.WebhookConfig.MaxCurrentCustomer)),
+		)
 		tx.Rollback(ctx)
 		return err
 	}
 
 	availableAgentIDInt, err := strconv.Atoi(availableAgentID)
 	if err != nil {
-		fmt.Println("Error parsing available agent id:", err)
+		logger.Error(
+			"failed to parse available agent id",
+			slog.Any("error", err),
+			slog.String("agent_id_str", availableAgentID),
+			slog.String("room_id", wimr.RoomID),
+		)
 		tx.Rollback(ctx)
 		return err
 	}
 
 	_, err = wimr.AssignAgent(availableAgentIDInt)
 	if err != nil {
-		fmt.Println("Error allocating agent:", err)
+		logger.Error(
+			"failed to assign agent",
+			slog.Any("error", err),
+			slog.Int("agent_id", availableAgentIDInt),
+			slog.String("room_id", wimr.RoomID),
+		)
 		tx.Rollback(ctx)
 		return err
 	}
@@ -85,7 +122,12 @@ func HandleChatAssignAgentTask(ctx context.Context, task *asynq.Task) (err error
 	customerCountKey := fmt.Sprintf("agent:%s:customer_count", availableAgentID)
 	err = rdb.Incr(ctx, customerCountKey).Err()
 	if err != nil {
-		fmt.Println("Error increasing customer count:", err)
+		logger.Error(
+			"failed to increase customer count",
+			slog.Any("error", err),
+			slog.String("customer_count_key", customerCountKey),
+			slog.String("agent_id", availableAgentID),
+		)
 		tx.Rollback(ctx)
 		return err
 	}
@@ -93,16 +135,26 @@ func HandleChatAssignAgentTask(ctx context.Context, task *asynq.Task) (err error
 	roomAgentKey := fmt.Sprintf("room:%s:agent", wimr.RoomID)
 	err = rdb.Set(ctx, roomAgentKey, availableAgentID, 0).Err()
 	if err != nil {
-		fmt.Println("Error set room agent:", err)
+		logger.Error(
+			"failed to set room agent mapping",
+			slog.Any("error", err),
+			slog.String("room_agent_key", roomAgentKey),
+			slog.String("agent_id", availableAgentID),
+			slog.String("room_id", wimr.RoomID),
+		)
 		tx.Rollback(ctx)
 		return err
 	}
 
 	err = UpdateChat(ctx, tx, &wimr)
 	if err != nil {
-		fmt.Println("Error updating chat:", err)
+		logger.Error(
+			"failed to update chat",
+			slog.Any("error", err),
+			slog.String("room_id", wimr.RoomID),
+		)
 		tx.Rollback(ctx)
-		return
+		return err
 	}
 
 	// go func() {
@@ -117,11 +169,19 @@ func HandleChatAssignAgentTask(ctx context.Context, task *asynq.Task) (err error
 
 	err = tx.Commit(ctx)
 	if err != nil {
-		fmt.Println("Error committing transaction:", err)
+		logger.Error(
+			"failed to commit transaction",
+			slog.Any("error", err),
+			slog.String("room_id", wimr.RoomID),
+		)
 		return err
 	}
 
-	println("Handling chat assign agent task for:", wimr.RoomID)
+	logger.Info(
+		"successfully handled chat assign agent task",
+		slog.String("room_id", wimr.RoomID),
+		slog.String("assigned_agent_id", availableAgentID),
+	)
 
 	return nil
 }

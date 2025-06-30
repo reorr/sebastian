@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -23,6 +24,11 @@ func IsChatRoomExists(ctx context.Context, tx pgx.Tx, roomID string) (bool, erro
 	err := tx.QueryRow(ctx, q, roomID).Scan(&exists)
 
 	if err != nil {
+		logger.Error(
+			"could not get chat is exists from db",
+			slog.String("room_id", roomID),
+			slog.Any("error", err),
+		)
 		return false, err
 	}
 
@@ -35,6 +41,11 @@ func CreateChat(ctx context.Context, tx pgx.Tx, wimr *WebhookIncomingMessageRequ
 	_, err := tx.Exec(ctx, q, wimr.RoomID, wimr)
 
 	if err != nil {
+		logger.Error(
+			"could not insert chat into db",
+			slog.String("room_id", wimr.RoomID),
+			slog.Any("error", err),
+		)
 		return err
 	}
 
@@ -47,6 +58,11 @@ func UpdateChat(ctx context.Context, tx pgx.Tx, wimr *WebhookIncomingMessageRequ
 	_, err := tx.Exec(ctx, q, "SERVED", wimr.RoomID)
 
 	if err != nil {
+		logger.Error(
+			"could not update chat into db",
+			slog.String("room_id", wimr.RoomID),
+			slog.Any("error", err),
+		)
 		return err
 	}
 

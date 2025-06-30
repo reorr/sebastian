@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -18,12 +20,12 @@ import (
 
 const (
 	AUTH_PATH                    = "/api/v1/auth"
-	MARK_AS_RESOLVED_PATH        = "/api/v1/admin/service/mark_as_resolved"
 	ALLOCATE_AGENT_PATH          = "/api/v1/admin/service/allocate_agent"
 	ALLOCATE_ASSIGN_AGENT_PATH   = "/api/v1/admin/service/allocate_assign_agent"
 	ASSIGN_AGENT_PATH            = "/api/v1/admin/service/assign_agent"
-	GET_ALL_AGENT_PATH           = "/api/v2/admin/agents?limit=1000"
 	GET_AVAILABLE_AGENT_PATH     = "/api/v2/admin/service/available_agents"
+	MARK_AS_RESOLVED_PATH        = "/api/v1/admin/service/mark_as_resolved"
+	GET_ALL_AGENT_PATH           = "/api/v2/admin/agents?limit=1000"
 	GET_WEBHOOK_CONFIG_PATH      = "/api/v2/admin/webhook_config"
 	SET_WEBHOOK_MARK_AS_RESOLVED = "/api/v1/app/webhook/mark_as_resolved"
 	SET_WEBHOOK_INCOMING_MESSAGE = "/api/v1/app/webhook/agent_allocation"
@@ -38,15 +40,12 @@ var (
 	rdb         *redis.Client
 	queueClient *asynq.Client
 	pool        *pgxpool.Pool
+	logger      *slog.Logger
 	err         error
 )
 
 func main() {
-	// runArg := os.Args[1]
-	// if runArg != "webhook" && runArg != "worker" {
-	// 	fmt.Println("Invalid argument. Use 'webhook' or 'worker'.")
-	// 	os.Exit(1)
-	// }
+	logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	var configFileName, exec string
 	flag.StringVar(&exec, "e", "webhook", "Service to run. Use 'webhook' or 'worker'.")
@@ -59,29 +58,54 @@ func main() {
 	if len(configFileName) > 0 {
 		err := loadConfigFromFile(configFileName, &cfg)
 		if err != nil {
-			// log.Warn().Str("file", configFileName).Err(err).Msg("cannot load config file, use defaults")
+			logger.Warn(
+				"can not load config from file",
+				slog.String("file name", configFileName),
+				slog.Any("error", err),
+			)
 		}
 	}
 
-	// log.Debug().Any("config", cfg).Msg("config loaded")
+	logger.Debug(
+		"config loaded",
+		slog.Any("config", cfg),
+	)
 
 	ctx := context.Background()
 
-	fmt.Println("Webhook base url: ", cfg.WebhookConfig.BaseUrl)
+	logger.Info(
+		"serving with webhook base url",
+		slog.String("url", cfg.WebhookConfig.BaseUrl),
+	)
 
 	rdb = redis.NewClient(&redis.Options{
 		Addr: cfg.RedisConfig.Url,
 	})
+	if rdb == nil {
+		err = errors.New("could not connect to redis")
+		logger.Error(
+			err.Error(),
+			slog.Any("error", err),
+		)
+		panic(err)
+	}
 
 	queueClient = asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.RedisConfig.Url})
 	if queueClient == nil {
-		fmt.Println("Error creating Asynq client")
-		panic("Failed to create Asynq client")
+		err = errors.New("could not connect to redis queue")
+		logger.Error(
+			err.Error(),
+			slog.Any("error", err),
+		)
+		panic(err)
 	}
 
 	pool, err = pgxpool.New(ctx, cfg.DBConfig.ConnectionString)
 	if err != nil {
-		fmt.Printf("Error connecting to database: %v\n", err.Error())
+		logger.Error(
+			"could not connect to database",
+			slog.Any("error", err),
+		)
 		panic(err)
 	}
 
@@ -101,12 +125,13 @@ func runServer(port int) {
 	r.Post(WEBHOOK_INCOMING_MESSAGE_PATH, HandleIncomingMessage)
 	r.Post(WEBHOOK_MARK_AS_RESOLVED_PATH, HandleMarkAsResolved)
 	r.Get("/agents", HandleGetAllAgent)
-	// r.Get("/webhook-config", HandlerGetWebhookConfig)
 	r.Post("/set-webhook", HandlerSetWebhook)
-	// r.Get("/get-available-agent", HandlerGetAvailableAgent)
 
 	listenPort := fmt.Sprintf(":%d", port)
-	fmt.Printf("Listening on port: %s\n", listenPort)
+	logger.Info(
+		"webhook running",
+		slog.String("port", listenPort),
+	)
 
 	http.ListenAndServe(listenPort, r)
 }
@@ -115,7 +140,8 @@ func runWorker() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	fmt.Println("Starting worker...")
+	logger.Info("starting worker")
+
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.RedisConfig.Url},
 		asynq.Config{
@@ -123,8 +149,12 @@ func runWorker() {
 		},
 	)
 
-	if err := CacheAgentStatus(); err != nil {
-		panic(fmt.Errorf("Initial agent cache update failed: %w", err))
+	if err := CacheAgentStatus(ctx); err != nil {
+		logger.Error(
+			"could not initiate populate agent",
+			slog.Any("error", err),
+		)
+		panic(fmt.Errorf("initial agent cache update failed: %w", err))
 	}
 	InitAgents(ctx)
 
@@ -132,15 +162,22 @@ func runWorker() {
 	mux.HandleFunc(TypeChatAssignAgent, HandleChatAssignAgentTask)
 
 	if err := srv.Run(mux); err != nil {
-		panic(fmt.Sprintf("could not run server: %v", err))
+		logger.Error(
+			"failed to start worker",
+			slog.Any("error", err),
+		)
+		panic(fmt.Sprintf("could not start worker: %v", err))
 	}
 }
 
-func CacheAgentStatus() error {
-	ctx := context.Background()
+func CacheAgentStatus(ctx context.Context) error {
 
 	agents, err := GetAllAgent()
 	if err != nil {
+		logger.Error(
+			"could not get agents to cache",
+			slog.Any("error", err),
+		)
 		return err
 	}
 
@@ -151,12 +188,22 @@ func CacheAgentStatus() error {
 
 		err := rdb.SAdd(ctx, "agents:ids", idStr).Err()
 		if err != nil {
+			logger.Error(
+				"could not cache agent id",
+				slog.String("agent_id", idStr),
+				slog.Any("error", err),
+			)
 			return fmt.Errorf("SAdd error: %w", err)
 		}
 
 		err = rdb.Set(ctx, fmt.Sprintf("agent:%s:is_online", idStr), agent.IsAvailable, 0).Err()
 		if err != nil {
-			return fmt.Errorf("Set is_online error: %w", err)
+			logger.Error(
+				"could not cache agent online status",
+				slog.String("agent_id", idStr),
+				slog.Any("error", err),
+			)
+			return fmt.Errorf("set is_online error: %w", err)
 		}
 
 		_, err = rdb.Get(ctx, fmt.Sprintf("agent:%s:customer_count", idStr)).Int()
@@ -164,23 +211,51 @@ func CacheAgentStatus() error {
 			if err == redis.Nil {
 				err = rdb.Set(ctx, fmt.Sprintf("agent:%s:customer_count", idStr), -1, 0).Err()
 				if err != nil {
-					return fmt.Errorf("Set customer_count error: %w", err)
+					logger.Error(
+						"could not cache initiate agent customer count",
+						slog.String("agent_id", idStr),
+						slog.Any("error", err),
+					)
+					return fmt.Errorf("set customer_count error: %w", err)
 				}
 			} else {
-				return fmt.Errorf("Get customer_count error: %w", err)
+				logger.Error(
+					"could not get cache agents customer count",
+					slog.String("agent_id", idStr),
+					slog.Any("error", err),
+				)
+				return fmt.Errorf("get customer_count error: %w", err)
 			}
 		}
 	}
 
 	existingIDs, err := rdb.SMembers(ctx, "agents:ids").Result()
 	if err != nil {
+		logger.Error(
+			"could not get cache agent ids",
+			slog.Any("error", err),
+		)
 		return fmt.Errorf("SMembers error: %w", err)
 	}
 
 	for _, id := range existingIDs {
 		if _, found := currentAgentIDs[id]; !found {
-			rdb.Del(ctx, fmt.Sprintf("agent:%s:is_online", id))
-			rdb.SRem(ctx, "agents:ids", id)
+			err = rdb.Del(ctx, fmt.Sprintf("agent:%s:is_online", id)).Err()
+			if err != nil {
+				logger.Error(
+					"could not remove cache agent online status",
+					slog.String("agent_id", id),
+					slog.Any("error", err),
+				)
+			}
+			err = rdb.SRem(ctx, "agents:ids", id).Err()
+			if err != nil {
+				logger.Error(
+					"could not remove cache agent id",
+					slog.String("agent_id", id),
+					slog.Any("error", err),
+				)
+			}
 		}
 	}
 
@@ -196,12 +271,15 @@ func InitAgents(ctx context.Context) {
 		for {
 			select {
 			case <-ticker.C:
-				if err := CacheAgentStatus(); err != nil {
-					log.Println("Agent cache update failed:", err)
+				if err := CacheAgentStatus(ctx); err != nil {
+					logger.Error(
+						"agent cache update failed",
+						slog.Any("error", err),
+					)
 				}
-				log.Println("Agent cache updated")
+				logger.Info("agent cache updated")
 			case <-ctx.Done():
-				log.Println("Stopping agent status updater")
+				logger.Info("stopping agent status updater")
 				return
 			}
 		}
