@@ -45,6 +45,98 @@ func getToken(ctx context.Context) (string, error) {
 	return token, nil
 }
 
+func CacheAgentStatus(ctx context.Context) error {
+
+	agents, err := GetAllAgent()
+	if err != nil {
+		logger.Error(
+			"could not get agents to cache",
+			slog.Any("error", err),
+		)
+		return err
+	}
+
+	currentAgentIDs := make(map[string]struct{})
+	for _, agent := range agents.Data.Agents {
+		idStr := strconv.Itoa(agent.ID)
+		currentAgentIDs[idStr] = struct{}{}
+
+		err := rdb.SAdd(ctx, "agents:ids", idStr).Err()
+		if err != nil {
+			logger.Error(
+				"could not cache agent id",
+				slog.String("agent_id", idStr),
+				slog.Any("error", err),
+			)
+			return fmt.Errorf("SAdd error: %w", err)
+		}
+
+		err = rdb.Set(ctx, fmt.Sprintf("agent:%s:is_online", idStr), agent.IsAvailable, 0).Err()
+		if err != nil {
+			logger.Error(
+				"could not cache agent online status",
+				slog.String("agent_id", idStr),
+				slog.Any("error", err),
+			)
+			return fmt.Errorf("set is_online error: %w", err)
+		}
+
+		_, err = rdb.Get(ctx, fmt.Sprintf("agent:%s:customer_count", idStr)).Int()
+		if err != nil {
+			if err == redis.Nil {
+				err = rdb.Set(ctx, fmt.Sprintf("agent:%s:customer_count", idStr), -1, 0).Err()
+				if err != nil {
+					logger.Error(
+						"could not cache initiate agent customer count",
+						slog.String("agent_id", idStr),
+						slog.Any("error", err),
+					)
+					return fmt.Errorf("set customer_count error: %w", err)
+				}
+			} else {
+				logger.Error(
+					"could not get cache agents customer count",
+					slog.String("agent_id", idStr),
+					slog.Any("error", err),
+				)
+				return fmt.Errorf("get customer_count error: %w", err)
+			}
+		}
+	}
+
+	existingIDs, err := rdb.SMembers(ctx, "agents:ids").Result()
+	if err != nil {
+		logger.Error(
+			"could not get cache agent ids",
+			slog.Any("error", err),
+		)
+		return fmt.Errorf("SMembers error: %w", err)
+	}
+
+	for _, id := range existingIDs {
+		if _, found := currentAgentIDs[id]; !found {
+			err = rdb.Del(ctx, fmt.Sprintf("agent:%s:is_online", id)).Err()
+			if err != nil {
+				logger.Error(
+					"could not remove cache agent online status",
+					slog.String("agent_id", id),
+					slog.Any("error", err),
+				)
+			}
+			err = rdb.SRem(ctx, "agents:ids", id).Err()
+			if err != nil {
+				logger.Error(
+					"could not remove cache agent id",
+					slog.String("agent_id", id),
+					slog.Any("error", err),
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
 type CachedAgent struct {
 	ID                   string
 	CurrentCustomerCount int
@@ -115,7 +207,7 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 						slog.String("is_online_key", isOnlineKey),
 						slog.String("agent_id", id),
 					)
-					return agentID, fmt.Errorf("Could not get is_online")
+					return agentID, fmt.Errorf("could not get is_online")
 				}
 			}
 
@@ -135,7 +227,7 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 					slog.String("customer_count_key", customerCountKey),
 					slog.String("agent_id", id),
 				)
-				return agentID, fmt.Errorf("Could not get customer count")
+				return agentID, fmt.Errorf("could not get customer count")
 			}
 
 			if customerCount == -1 {
@@ -193,7 +285,7 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 		)
 		time.Sleep(retryInterval)
 	}
-	return agentID, fmt.Errorf("Can not find any available agent")
+	return agentID, fmt.Errorf("can not find any available agent")
 }
 
 func GetAndCacheAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxCustomerCount int) (agentID string, agentCustomerCount int, err error) {

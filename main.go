@@ -1,18 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
-	"strconv"
+	"regexp"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -121,7 +122,7 @@ func main() {
 
 func runServer(port int) {
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	r.Use(slogMiddleware)
 	r.Post(WEBHOOK_INCOMING_MESSAGE_PATH, HandleIncomingMessage)
 	r.Post(WEBHOOK_MARK_AS_RESOLVED_PATH, HandleMarkAsResolved)
 	r.Get("/agents", HandleGetAllAgent)
@@ -134,6 +135,91 @@ func runServer(port int) {
 	)
 
 	http.ListenAndServe(listenPort, r)
+}
+
+func slogMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Capture request body
+		var bodyData string
+		if r.Body != nil {
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err == nil {
+				bodyData = stripPII(string(bodyBytes))
+				// Restore body for handler
+				r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			}
+		}
+
+		ww := &responseWriter{ResponseWriter: w, statusCode: 0}
+		next.ServeHTTP(ww, r)
+
+		// If no status was explicitly set, default to 200
+		status := ww.statusCode
+		if status == 0 {
+			status = 200
+		}
+
+		logAttrs := []slog.Attr{
+			slog.String("method", r.Method),
+			slog.String("host", r.Host),
+			slog.String("path", r.URL.Path),
+			slog.String("remote_addr", r.RemoteAddr),
+			slog.Int("status", status),
+			slog.Int("bytes", ww.bytesWritten),
+			slog.Duration("duration", time.Since(start)),
+		}
+
+		if bodyData != "" {
+			logAttrs = append(logAttrs, slog.String("request_body", bodyData))
+		}
+
+		logger.LogAttrs(r.Context(), slog.LevelInfo, "http request", logAttrs...)
+	})
+}
+
+func stripPII(body string) string {
+	// Common PII patterns to redact
+	patterns := map[string]string{
+		`"password"\s*:\s*"[^"]*"`:      `"password":"[REDACTED]"`,
+		`"email"\s*:\s*"[^"]*"`:         `"email":"[REDACTED]"`,
+		`"phone"\s*:\s*"[^"]*"`:         `"phone":"[REDACTED]"`,
+		`"token"\s*:\s*"[^"]*"`:         `"token":"[REDACTED]"`,
+		`"api_key"\s*:\s*"[^"]*"`:       `"api_key":"[REDACTED]"`,
+		`"secret"\s*:\s*"[^"]*"`:        `"secret":"[REDACTED]"`,
+		`"authorization"\s*:\s*"[^"]*"`: `"authorization":"[REDACTED]"`,
+	}
+
+	result := body
+	for pattern, replacement := range patterns {
+		re := regexp.MustCompile(`(?i)` + pattern)
+		result = re.ReplaceAllString(result, replacement)
+	}
+
+	// Limit body size to prevent huge logs
+	if len(result) > 1000 {
+		result = result[:1000] + "...[TRUNCATED]"
+	}
+
+	return result
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode   int
+	bytesWritten int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	n, err := rw.ResponseWriter.Write(b)
+	rw.bytesWritten += n
+	return n, err
 }
 
 func runWorker() {
@@ -168,98 +254,6 @@ func runWorker() {
 		)
 		panic(fmt.Sprintf("could not start worker: %v", err))
 	}
-}
-
-func CacheAgentStatus(ctx context.Context) error {
-
-	agents, err := GetAllAgent()
-	if err != nil {
-		logger.Error(
-			"could not get agents to cache",
-			slog.Any("error", err),
-		)
-		return err
-	}
-
-	currentAgentIDs := make(map[string]struct{})
-	for _, agent := range agents.Data.Agents {
-		idStr := strconv.Itoa(agent.ID)
-		currentAgentIDs[idStr] = struct{}{}
-
-		err := rdb.SAdd(ctx, "agents:ids", idStr).Err()
-		if err != nil {
-			logger.Error(
-				"could not cache agent id",
-				slog.String("agent_id", idStr),
-				slog.Any("error", err),
-			)
-			return fmt.Errorf("SAdd error: %w", err)
-		}
-
-		err = rdb.Set(ctx, fmt.Sprintf("agent:%s:is_online", idStr), agent.IsAvailable, 0).Err()
-		if err != nil {
-			logger.Error(
-				"could not cache agent online status",
-				slog.String("agent_id", idStr),
-				slog.Any("error", err),
-			)
-			return fmt.Errorf("set is_online error: %w", err)
-		}
-
-		_, err = rdb.Get(ctx, fmt.Sprintf("agent:%s:customer_count", idStr)).Int()
-		if err != nil {
-			if err == redis.Nil {
-				err = rdb.Set(ctx, fmt.Sprintf("agent:%s:customer_count", idStr), -1, 0).Err()
-				if err != nil {
-					logger.Error(
-						"could not cache initiate agent customer count",
-						slog.String("agent_id", idStr),
-						slog.Any("error", err),
-					)
-					return fmt.Errorf("set customer_count error: %w", err)
-				}
-			} else {
-				logger.Error(
-					"could not get cache agents customer count",
-					slog.String("agent_id", idStr),
-					slog.Any("error", err),
-				)
-				return fmt.Errorf("get customer_count error: %w", err)
-			}
-		}
-	}
-
-	existingIDs, err := rdb.SMembers(ctx, "agents:ids").Result()
-	if err != nil {
-		logger.Error(
-			"could not get cache agent ids",
-			slog.Any("error", err),
-		)
-		return fmt.Errorf("SMembers error: %w", err)
-	}
-
-	for _, id := range existingIDs {
-		if _, found := currentAgentIDs[id]; !found {
-			err = rdb.Del(ctx, fmt.Sprintf("agent:%s:is_online", id)).Err()
-			if err != nil {
-				logger.Error(
-					"could not remove cache agent online status",
-					slog.String("agent_id", id),
-					slog.Any("error", err),
-				)
-			}
-			err = rdb.SRem(ctx, "agents:ids", id).Err()
-			if err != nil {
-				logger.Error(
-					"could not remove cache agent id",
-					slog.String("agent_id", id),
-					slog.Any("error", err),
-				)
-			}
-		}
-	}
-
-	return nil
 }
 
 func InitAgents(ctx context.Context) {
