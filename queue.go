@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/hibiken/asynq"
+	"sebastian/qiscus"
 )
 
 type QueueConfig struct {
@@ -22,7 +23,7 @@ func NewQueueConfig(redisURL string) *QueueConfig {
 
 const TypeChatAssignAgent = "chat:assign_agent"
 
-func NewChatAssignAgentTask(wimr *WebhookIncomingMessageRequest) (*asynq.Task, error) {
+func NewChatAssignAgentTask(wimr *qiscus.WebhookIncomingMessageRequest) (*asynq.Task, error) {
 	payload, err := json.Marshal(wimr)
 	if err != nil {
 		return nil, err
@@ -32,7 +33,7 @@ func NewChatAssignAgentTask(wimr *WebhookIncomingMessageRequest) (*asynq.Task, e
 }
 
 func HandleChatAssignAgentTask(ctx context.Context, task *asynq.Task) (err error) {
-	var wimr WebhookIncomingMessageRequest
+	var wimr qiscus.WebhookIncomingMessageRequest
 	if err = json.Unmarshal(task.Payload(), &wimr); err != nil {
 		logger.Error(
 			"failed to unmarshal task payload",
@@ -107,7 +108,7 @@ func HandleChatAssignAgentTask(ctx context.Context, task *asynq.Task) (err error
 		return err
 	}
 
-	_, err = wimr.AssignAgent(availableAgentIDInt)
+	_, err = qiscusClient.AssignAgent(wimr.RoomID, availableAgentIDInt)
 	if err != nil {
 		logger.Error(
 			"failed to assign agent",

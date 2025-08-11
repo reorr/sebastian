@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5"
+	"sebastian/qiscus"
 )
 
 type DBConfig struct {
@@ -35,7 +36,7 @@ func IsChatRoomExists(ctx context.Context, tx pgx.Tx, roomID string) (bool, erro
 	return exists, nil
 }
 
-func CreateChat(ctx context.Context, tx pgx.Tx, wimr *WebhookIncomingMessageRequest) error {
+func CreateChat(ctx context.Context, tx pgx.Tx, wimr *qiscus.WebhookIncomingMessageRequest) error {
 	q := `INSERT INTO chat(room_id, data) VALUES ( $1, $2 )`
 
 	_, err := tx.Exec(ctx, q, wimr.RoomID, wimr)
@@ -52,7 +53,7 @@ func CreateChat(ctx context.Context, tx pgx.Tx, wimr *WebhookIncomingMessageRequ
 	return nil
 }
 
-func UpdateChat(ctx context.Context, tx pgx.Tx, wimr *WebhookIncomingMessageRequest) error {
+func UpdateChat(ctx context.Context, tx pgx.Tx, wimr *qiscus.WebhookIncomingMessageRequest) error {
 	q := `UPDATE chat SET status = $1 WHERE room_id = $2`
 
 	_, err := tx.Exec(ctx, q, "SERVED", wimr.RoomID)

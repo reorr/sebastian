@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/redis/go-redis/v9"
+	"sebastian/qiscus"
 )
 
 func HandleIncomingMessage(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +22,7 @@ func HandleIncomingMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data WebhookIncomingMessageRequest
+	var data qiscus.WebhookIncomingMessageRequest
 	err = json.Unmarshal(body, &data)
 	if err != nil {
 		logger.Error(
@@ -60,7 +61,7 @@ func HandleIncomingMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleGetAllAgent(w http.ResponseWriter, r *http.Request) {
-	agents, err := GetAllAgent()
+	agents, err := qiscusClient.GetAllAgent()
 	if err != nil {
 		logger.Error(
 			"failed to get all agents",
@@ -86,7 +87,7 @@ func HandleGetAllAgent(w http.ResponseWriter, r *http.Request) {
 func HandlerGetWebhookConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	config, err := GetWebhookConfig(ctx)
+	config, err := qiscusClient.GetWebhookConfig(ctx)
 	if err != nil {
 		logger.Error(
 			"failed to get webhook config",
@@ -109,7 +110,7 @@ func HandlerGetWebhookConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandlerSetWebhook(w http.ResponseWriter, r *http.Request) {
-	_, err = SetWebHookIncomingMessage(cfg.WebhookConfig.BaseUrl + WEBHOOK_INCOMING_MESSAGE_PATH)
+	_, err = qiscusClient.SetWebHookIncomingMessage(cfg.WebhookConfig.BaseUrl + WEBHOOK_INCOMING_MESSAGE_PATH)
 	if err != nil {
 		logger.Error(
 			"failed to set incoming message webhook",
@@ -120,7 +121,7 @@ func HandlerSetWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := SetWebHookMarkAsResolved(cfg.WebhookConfig.BaseUrl + WEBHOOK_MARK_AS_RESOLVED_PATH)
+	res, err := qiscusClient.SetWebHookMarkAsResolved(cfg.WebhookConfig.BaseUrl + WEBHOOK_MARK_AS_RESOLVED_PATH)
 	if err != nil {
 		logger.Error(
 			"failed to set mark as resolved webhook",
@@ -156,7 +157,7 @@ func HandleMarkAsResolved(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data WebhookMarkAsResolvedRequest
+	var data qiscus.WebhookMarkAsResolvedRequest
 	err = json.Unmarshal(body, &data)
 	if err != nil {
 		logger.Error(

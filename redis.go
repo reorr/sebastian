@@ -20,34 +20,8 @@ func NewRedisConfig(redisUrl string) *RedisConfig {
 	}
 }
 
-func getToken(ctx context.Context) (string, error) {
-	cachedToken, err := rdb.Get(ctx, CACHE_TOKEN_KEY).Result()
-	if err != nil && err != redis.Nil {
-		return "", err
-	}
-	if cachedToken != "" {
-		return cachedToken, nil
-	}
-
-	login := NewLoginRequest("wefeho7425@linacit.com", "RTwEe111")
-	tokenResponse, err := login.Login()
-	if err != nil {
-		return "", err
-	}
-
-	token := tokenResponse.Data.User.AuthenticationToken
-
-	err = rdb.Set(ctx, CACHE_TOKEN_KEY, token, 3600).Err()
-	if err != nil {
-		return "", err
-	}
-
-	return token, nil
-}
-
-func CacheAgentStatus(ctx context.Context) error {
-
-	agents, err := GetAllAgent()
+func GetAndCacheAgentStatus(ctx context.Context) error {
+	agents, err := qiscusClient.GetAllAgent()
 	if err != nil {
 		logger.Error(
 			"could not get agents to cache",
@@ -289,7 +263,7 @@ func GetAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxC
 }
 
 func GetAndCacheAvailableAgentWithCustomerCount(ctx context.Context, roomID string, maxCustomerCount int) (agentID string, agentCustomerCount int, err error) {
-	availableAgents, err := GetAvailableAgent(roomID)
+	availableAgents, err := qiscusClient.GetAvailableAgent(roomID)
 	if err != nil {
 		logger.Error(
 			"failed to get available agents from api",
